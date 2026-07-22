@@ -27,6 +27,31 @@ if _COOKIES_B64 and not YTDLP_COOKIES:
 
 app = FastAPI(title="frame-picker")
 
+# CORS abierto para que hcti (u otro renderer) pueda cargar la fuente por @font-face.
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware, allow_origins=["*"],
+    allow_methods=["*"], allow_headers=["*"],
+)
+
+# Servir los assets del template (fuente SPORTPIXEL + acentos) por URL.
+from fastapi.responses import FileResponse
+_ASSET_TYPES = {
+    "sp.woff2": "font/woff2",
+    "a1.png": "image/png", "a2.png": "image/png",
+    "aL.png": "image/png", "aR.png": "image/png",
+}
+
+
+@app.get("/assets/{name}")
+def asset(name: str):
+    if name not in _ASSET_TYPES:
+        raise HTTPException(status_code=404, detail="not found")
+    path = os.path.join(os.path.dirname(__file__), name)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="missing")
+    return FileResponse(path, media_type=_ASSET_TYPES[name])
+
 
 class AnalyzeReq(BaseModel):
     video_url: str
