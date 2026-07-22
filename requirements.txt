@@ -1,5 +1,6 @@
 fastapi
 uvicorn[standard]
 yt-dlp
-opencv-python-headless
+numpy<2
+opencv-python-headless==4.10.0.84
 pydantic

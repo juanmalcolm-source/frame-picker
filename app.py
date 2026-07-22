@@ -43,6 +43,19 @@ def health():
     return {"ok": True, "service": "frame-picker"}
 
 
+@app.get("/diag")
+def diag():
+    import numpy
+    return {
+        "cv2_version": getattr(cv2, "__version__", "?"),
+        "cv2_file": getattr(cv2, "__file__", "?"),
+        "has_CascadeClassifier": hasattr(cv2, "CascadeClassifier"),
+        "has_data": hasattr(cv2, "data"),
+        "numpy": numpy.__version__,
+        "n_attrs": len(dir(cv2)),
+    }
+
+
 @app.post("/analyze")
 def analyze(req: AnalyzeReq, x_api_key: str = Header(default="")):
     if API_SECRET and x_api_key != API_SECRET:
