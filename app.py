@@ -226,7 +226,7 @@ def frames_ep(req: FramesReq, x_api_key: str = Header(default="")):
                 face = {"cx": float((fx + fw / 2) / w),
                         "cy": float((fy + fh / 2) / h),
                         "w": float(fw / w)}
-            ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 82])
+            ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])
             t = start + (i + 0.5) * seg_dur / nf
             out.append({
                 "t": round(t, 1),
@@ -242,6 +242,96 @@ def frames_ep(req: FramesReq, x_api_key: str = Header(default="")):
             "window": {"start": round(start, 1), "end": round(end, 1)},
             "n": len(out),
             "frames": out,
+        }
+
+
+class FrameHQReq(BaseModel):
+    video_url: str
+    t: float = 0.0
+
+
+@app.post("/frame_hq")
+def frame_hq(req: FrameHQReq, x_api_key: str = Header(default="")):
+    """Devuelve UN fotograma en la maxima resolucion disponible (hasta 2160p)
+    en el instante t. Se usa al aplicar el frame elegido para que el thumbnail
+    final quede nitido, sin cargar toda la tira en alta."""
+    if API_SECRET and x_api_key != API_SECRET:
+        raise HTTPException(status_code=401, detail="invalid api key")
+
+    url = req.video_url
+    dur = _duration(url) or 120.0
+    t = max(0.0, min(float(req.t), max(0.0, dur - 0.1)))
+    start = max(0.0, t - 2.0)
+    end = min(dur, t + 3.0)
+    section = f"*{int(start)}-{int(end) + 1}"
+    seek = max(0.0, t - start)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out_tmpl = os.path.join(tmp, "seg.%(ext)s")
+
+        def _download(fmt):
+            for f in glob.glob(os.path.join(tmp, "seg.*")):
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
+            dl = ["yt-dlp", "--no-warnings", "-f", fmt,
+                  "--download-sections", section,
+                  "-o", out_tmpl] + _cookies_args() + _client_args() + _proxy_args() + [url]
+            rr = _run(dl)
+            cand = [s for s in glob.glob(os.path.join(tmp, "seg.*"))
+                    if not s.endswith(".part") and os.path.getsize(s) > 10000]
+            if cand:
+                return max(cand, key=lambda s: os.path.getsize(s)), rr
+            return None, rr
+
+        # Preferimos la maxima calidad de video (solo-video DASH); caemos a
+        # progresivo si hace falta. Ventana corta => descarga rapida aun en 4K.
+        seg, r = _download(
+            "bestvideo[height<=2160][ext=mp4]/bestvideo[ext=mp4]"
+            "/bestvideo/best[ext=mp4]/best")
+        if not seg:
+            seg, r = _download("best")
+        if not seg:
+            reason = _dl_reason(r.stderr)
+            print(f"[frame_hq] download failed reason={reason}", flush=True)
+            raise HTTPException(status_code=502, detail=reason)
+
+        framedir = os.path.join(tmp, "frames")
+        os.makedirs(framedir, exist_ok=True)
+        outp = os.path.join(framedir, "hq.jpg")
+        # -ss despues de -i para precision; sin escalar => resolucion nativa.
+        _run(["ffmpeg", "-y", "-i", seg, "-an", "-map", "0:v:0?",
+              "-ss", f"{seek:.2f}", "-frames:v", "1",
+              "-q:v", "2", outp])
+        if not os.path.exists(outp):
+            _run(["ffmpeg", "-y", "-i", seg, "-an", "-map", "0:v:0?",
+                  "-frames:v", "1", "-q:v", "2", outp])
+        if not os.path.exists(outp):
+            raise HTTPException(status_code=500, detail="no_frame_extracted")
+
+        img = cv2.imread(outp)
+        if img is None:
+            raise HTTPException(status_code=500, detail="decode_failed")
+        h, w = img.shape[:2]
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        faces = cascade.detectMultiScale(gray, 1.1, 5, minSize=(80, 80))
+        face = None
+        if len(faces):
+            fx, fy, fw, fh = (int(v) for v in max(faces, key=lambda b: b[2] * b[3]))
+            face = {"cx": float((fx + fw / 2) / w),
+                    "cy": float((fy + fh / 2) / h),
+                    "w": float(fw / w)}
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        print(f"[frame_hq] t={t:.1f} res={w}x{h} faces={len(faces)}", flush=True)
+        return {
+            "ok": True,
+            "w": w, "h": h,
+            "faces": int(len(faces)),
+            "face": face,
+            "frame_b64": base64.b64encode(buf.tobytes()).decode(),
         }
 
 
