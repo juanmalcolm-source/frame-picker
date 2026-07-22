@@ -109,13 +109,17 @@ def analyze(req: AnalyzeReq, x_api_key: str = Header(default="")):
         section = f"*{start}-{end}"
 
         out_tmpl = os.path.join(tmp, "seg.%(ext)s")
+        # Preferimos un stream SOLO-VIDEO (evita tener que mezclar audio+video y
+        # que quede un fichero de audio suelto que ffmpeg no puede usar).
         dl = ["yt-dlp", "--no-warnings",
-              "-f", "bestvideo[height<=1080][ext=mp4]/best[height<=1080]/best",
+              "-f", "bestvideo[height<=1080][ext=mp4]/bestvideo[height<=1080]"
+                    "/best[height<=1080][ext=mp4]/best[height<=1080]/best",
               "--download-sections", section,
               "--force-keyframes-at-cuts",
               "-o", out_tmpl] + _cookies_args() + _client_args() + _proxy_args() + [url]
         r = _run(dl)
-        segs = glob.glob(os.path.join(tmp, "seg.*"))
+        segs = [s for s in glob.glob(os.path.join(tmp, "seg.*"))
+                if not s.endswith(".part")]
         if not segs:
             err = (r.stderr or "").lower()
             if "confirm you" in err or "not a bot" in err or "sign in to confirm" in err:
@@ -133,22 +137,29 @@ def analyze(req: AnalyzeReq, x_api_key: str = Header(default="")):
                 reason = "download_failed"
             print(f"[analyze] download failed reason={reason}", flush=True)
             raise HTTPException(status_code=502, detail=reason)
-        seg = segs[0]
+        # El fichero de video es el mas grande (el audio, si aparece, es menor).
+        seg = max(segs, key=lambda s: os.path.getsize(s))
+        print(f"[analyze] seg={os.path.basename(seg)} "
+              f"size={os.path.getsize(seg)} n_files={len(segs)}", flush=True)
 
-        # 2) Extraer ~12 fotogramas en HD
+        # 2) Extraer ~12 fotogramas en HD (solo video, ignoramos audio)
         framedir = os.path.join(tmp, "frames")
         os.makedirs(framedir, exist_ok=True)
-        _run(["ffmpeg", "-y", "-i", seg,
-              "-vf", "fps=1/1.5,scale=-2:1080",
-              "-frames:v", "12",
-              os.path.join(framedir, "f_%03d.jpg")])
+        f1 = _run(["ffmpeg", "-y", "-i", seg, "-an", "-map", "0:v:0?",
+                   "-vf", "fps=1/1.5,scale=-2:1080",
+                   "-frames:v", "12",
+                   os.path.join(framedir, "f_%03d.jpg")])
         frames = sorted(glob.glob(os.path.join(framedir, "*.jpg")))
         if not frames:
-            _run(["ffmpeg", "-y", "-i", seg, "-frames:v", "1",
-                  os.path.join(framedir, "f_001.jpg")])
+            # Fallback: sin filtro de fps, sacar unos fotogramas sueltos
+            f2 = _run(["ffmpeg", "-y", "-i", seg, "-an", "-map", "0:v:0?",
+                       "-vf", "scale=-2:1080", "-frames:v", "6",
+                       os.path.join(framedir, "f_%03d.jpg")])
             frames = sorted(glob.glob(os.path.join(framedir, "*.jpg")))
-        if not frames:
-            raise HTTPException(status_code=500, detail="no frames extracted")
+            if not frames:
+                print(f"[analyze] no frames. ff1={f1.stderr[-200:]} "
+                      f"ff2={f2.stderr[-200:]}", flush=True)
+                raise HTTPException(status_code=500, detail="no_frames_extracted")
 
         # 3) Elegir el mejor fotograma con cara (OpenCV)
         cascade = cv2.CascadeClassifier(
