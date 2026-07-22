@@ -11,6 +11,20 @@ from pydantic import BaseModel
 API_SECRET = os.environ.get("API_SECRET", "")
 YTDLP_COOKIES = os.environ.get("YTDLP_COOKIES", "")
 
+# Cookies seguras via variable de entorno (no se guardan en el repo publico).
+# Si YTDLP_COOKIES_B64 esta definida, se decodifica a un cookies.txt en disco
+# y se usa para autenticar yt-dlp contra YouTube (evita el bloqueo antibot).
+_COOKIES_B64 = os.environ.get("YTDLP_COOKIES_B64", "")
+if _COOKIES_B64 and not YTDLP_COOKIES:
+    try:
+        import base64 as _b64
+        _cookies_path = "/tmp/cookies.txt"
+        with open(_cookies_path, "wb") as _f:
+            _f.write(_b64.b64decode(_COOKIES_B64))
+        YTDLP_COOKIES = _cookies_path
+    except Exception:
+        pass
+
 app = FastAPI(title="frame-picker")
 
 
@@ -53,6 +67,7 @@ def diag():
         "has_data": hasattr(cv2, "data"),
         "numpy": numpy.__version__,
         "n_attrs": len(dir(cv2)),
+        "cookies_loaded": bool(YTDLP_COOKIES and os.path.exists(YTDLP_COOKIES)),
     }
 
 
