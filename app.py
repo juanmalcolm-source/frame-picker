@@ -93,8 +93,22 @@ def analyze(req: AnalyzeReq, x_api_key: str = Header(default="")):
         r = _run(dl)
         segs = glob.glob(os.path.join(tmp, "seg.*"))
         if not segs:
-            raise HTTPException(status_code=502,
-                                detail=f"yt-dlp download failed: {r.stderr[-400:]}")
+            err = (r.stderr or "").lower()
+            if "confirm you" in err or "not a bot" in err or "sign in to confirm" in err:
+                reason = "youtube_bot_block"
+            elif "cookies" in err and (
+                "expired" in err or "invalid" in err
+                or "no longer valid" in err or "rotate" in err
+            ):
+                reason = "cookies_invalid"
+            elif "http error 403" in err or "forbidden" in err:
+                reason = "forbidden_403"
+            elif "video unavailable" in err or "private video" in err:
+                reason = "video_unavailable"
+            else:
+                reason = "download_failed"
+            print(f"[analyze] download failed reason={reason}", flush=True)
+            raise HTTPException(status_code=502, detail=reason)
         seg = segs[0]
 
         # 2) Extraer ~12 fotogramas en HD
