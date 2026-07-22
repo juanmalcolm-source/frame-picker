@@ -53,9 +53,20 @@ def _client_args():
     return []
 
 
+# Proxy (idealmente residencial) para que YouTube vea una IP no-datacenter.
+# Formato: http://usuario:clave@host:puerto  (o socks5://...)
+YTDLP_PROXY = os.environ.get("YTDLP_PROXY", "")
+
+
+def _proxy_args():
+    if YTDLP_PROXY:
+        return ["--proxy", YTDLP_PROXY]
+    return []
+
+
 def _duration(url):
     cmd = ["yt-dlp", "--no-warnings", "--skip-download",
-           "--print", "%(duration)s"] + _cookies_args() + _client_args() + [url]
+           "--print", "%(duration)s"] + _cookies_args() + _client_args() + _proxy_args() + [url]
     try:
         r = _run(cmd, timeout=60)
         return float(r.stdout.strip().splitlines()[-1])
@@ -79,6 +90,8 @@ def diag():
         "numpy": numpy.__version__,
         "n_attrs": len(dir(cv2)),
         "cookies_loaded": bool(YTDLP_COOKIES and os.path.exists(YTDLP_COOKIES)),
+        "proxy_set": bool(YTDLP_PROXY),
+        "client": YTDLP_CLIENT,
     }
 
 
@@ -100,7 +113,7 @@ def analyze(req: AnalyzeReq, x_api_key: str = Header(default="")):
               "-f", "bestvideo[height<=1080][ext=mp4]/best[height<=1080]/best",
               "--download-sections", section,
               "--force-keyframes-at-cuts",
-              "-o", out_tmpl] + _cookies_args() + _client_args() + [url]
+              "-o", out_tmpl] + _cookies_args() + _client_args() + _proxy_args() + [url]
         r = _run(dl)
         segs = glob.glob(os.path.join(tmp, "seg.*"))
         if not segs:
