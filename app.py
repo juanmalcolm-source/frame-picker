@@ -109,18 +109,34 @@ def analyze(req: AnalyzeReq, x_api_key: str = Header(default="")):
         section = f"*{start}-{end}"
 
         out_tmpl = os.path.join(tmp, "seg.%(ext)s")
-        # Preferimos un stream SOLO-VIDEO (evita tener que mezclar audio+video y
-        # que quede un fichero de audio suelto que ffmpeg no puede usar).
-        dl = ["yt-dlp", "--no-warnings",
-              "-f", "bestvideo[height<=1080][ext=mp4]/bestvideo[height<=1080]"
-                    "/best[height<=1080][ext=mp4]/best[height<=1080]/best",
-              "--download-sections", section,
-              "--force-keyframes-at-cuts",
-              "-o", out_tmpl] + _cookies_args() + _client_args() + _proxy_args() + [url]
-        r = _run(dl)
-        segs = [s for s in glob.glob(os.path.join(tmp, "seg.*"))
-                if not s.endswith(".part")]
-        if not segs:
+
+        def _download(fmt):
+            # limpiar restos de intentos previos
+            for f in glob.glob(os.path.join(tmp, "seg.*")):
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
+            # SIN --force-keyframes-at-cuts: usa el descargador ffmpeg de yt-dlp,
+            # que clipa el tramo de forma fiable (el nativo dejaba un mp4 vacio).
+            dl = ["yt-dlp", "--no-warnings", "-f", fmt,
+                  "--download-sections", section,
+                  "-o", out_tmpl] + _cookies_args() + _client_args() + _proxy_args() + [url]
+            rr = _run(dl)
+            cand = [s for s in glob.glob(os.path.join(tmp, "seg.*"))
+                    if not s.endswith(".part") and os.path.getsize(s) > 10000]
+            if cand:
+                return max(cand, key=lambda s: os.path.getsize(s)), rr
+            return None, rr
+
+        # 1er intento: HD (DASH solo-video). 2o: progresivo (un solo fichero).
+        seg, r = _download(
+            "bestvideo[height<=1080][ext=mp4]/bestvideo[height<=720]"
+            "/best[height<=720][ext=mp4]/best")
+        if not seg:
+            seg, r = _download("best")
+
+        if not seg:
             err = (r.stderr or "").lower()
             if "confirm you" in err or "not a bot" in err or "sign in to confirm" in err:
                 reason = "youtube_bot_block"
@@ -137,10 +153,8 @@ def analyze(req: AnalyzeReq, x_api_key: str = Header(default="")):
                 reason = "download_failed"
             print(f"[analyze] download failed reason={reason}", flush=True)
             raise HTTPException(status_code=502, detail=reason)
-        # El fichero de video es el mas grande (el audio, si aparece, es menor).
-        seg = max(segs, key=lambda s: os.path.getsize(s))
         print(f"[analyze] seg={os.path.basename(seg)} "
-              f"size={os.path.getsize(seg)} n_files={len(segs)}", flush=True)
+              f"size={os.path.getsize(seg)}", flush=True)
 
         # 2) Extraer ~12 fotogramas en HD (solo video, ignoramos audio)
         framedir = os.path.join(tmp, "frames")
