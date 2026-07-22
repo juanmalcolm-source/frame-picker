@@ -40,6 +40,7 @@ _ASSET_TYPES = {
     "sp.woff2": "font/woff2",
     "a1.png": "image/png", "a2.png": "image/png",
     "aL.png": "image/png", "aR.png": "image/png",
+    "mont.woff2": "font/woff2",
 }
 
 
